@@ -7,6 +7,7 @@
     let clients = [];
     let incomingMessages = [];
     let eventSource = null;
+    let lastLoadedMessages = []; // store for detail view
 
     // ===== DOM Elements =====
     const $ = (sel) => document.querySelector(sel);
@@ -43,16 +44,17 @@
         btnSendSms: $('#btn-send-sms'),
         sendResult: $('#send-result'),
 
-        // Logs
-        logDirectionFilter: $('#log-direction-filter'),
+        // Logs — split view
         logLimit: $('#log-limit'),
         btnRefreshLogs: $('#btn-refresh-logs'),
-        logsTableContainer: $('#logs-table-container'),
-        logsTable: $('#logs-table'),
-        logsTableBody: $('#logs-table-body'),
-        emptyLogs: $('#empty-logs'),
+        outgoingLogs: $('#outgoing-logs'),
+        incomingLogs: $('#incoming-logs'),
+        outgoingCount: $('#outgoing-count'),
+        incomingLogCount: $('#incoming-log-count'),
+        emptyOutgoing: $('#empty-outgoing'),
+        emptyIncomingLogs: $('#empty-incoming-logs'),
 
-        // Incoming
+        // Incoming (real-time)
         incomingCount: $('#incoming-count'),
         incomingList: $('#incoming-list'),
         emptyIncoming: $('#empty-incoming'),
@@ -75,6 +77,8 @@
         btnVerifyCreds: $('#btn-verify-creds'),
         btnSaveClient: $('#btn-save-client'),
         btnToggleToken: $('#btn-toggle-token'),
+        btnFetchNumbers: $('#btn-fetch-numbers'),
+        fetchHint: $('#fetch-hint'),
         verifyResult: $('#verify-result'),
 
         // Message Detail Modal
@@ -145,13 +149,11 @@
     function renderClientList() {
         if (clients.length === 0) {
             dom.emptyClients.style.display = 'flex';
-            // Remove any client items but keep empty state
             dom.clientList.querySelectorAll('.client-item').forEach(el => el.remove());
             return;
         }
 
         dom.emptyClients.style.display = 'none';
-        // Remove existing items
         dom.clientList.querySelectorAll('.client-item').forEach(el => el.remove());
 
         clients.forEach(client => {
@@ -164,9 +166,8 @@
         <div class="client-avatar">${initials}</div>
         <div class="client-item-info">
           <div class="client-item-name">${escapeHtml(client.name)}</div>
-          <div class="client-item-phone">${escapeHtml(client.phoneNumber || '')}</div>
+          <div class="client-item-phone">${escapeHtml(client.phoneNumber || '')}${client.label ? ` <span class="client-item-label">${escapeHtml(client.label)}</span>` : ''}</div>
         </div>
-        ${client.label ? `<span class="client-item-label">${escapeHtml(client.label)}</span>` : ''}
         <div class="client-item-actions">
           <button class="btn-icon btn-edit-client" title="Edit" data-id="${client.id}">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -191,7 +192,6 @@
             dom.clientList.appendChild(el);
         });
 
-        // Attach edit/delete
         dom.clientList.querySelectorAll('.btn-edit-client').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -219,23 +219,32 @@
             dom.workspace.style.display = 'flex';
         }
 
-        // Update sidebar active state
         dom.clientList.querySelectorAll('.client-item').forEach(el => {
             el.classList.toggle('active', el.dataset.id === id);
         });
 
-        // Clear previous state
-        dom.logsTableBody.innerHTML = '';
-        dom.logsTable.style.display = 'none';
-        dom.emptyLogs.style.display = 'flex';
+        // Clear previous logs
+        clearLogColumns();
         dom.sendResult.style.display = 'none';
+    }
+
+    function clearLogColumns() {
+        dom.outgoingLogs.querySelectorAll('.log-card').forEach(el => el.remove());
+        dom.incomingLogs.querySelectorAll('.log-card').forEach(el => el.remove());
+        dom.emptyOutgoing.style.display = 'flex';
+        dom.emptyIncomingLogs.style.display = 'flex';
+        dom.outgoingCount.textContent = '0';
+        dom.incomingLogCount.textContent = '0';
+        lastLoadedMessages = [];
     }
 
     function openAddModal() {
         dom.modalTitle.textContent = 'Add Client';
         dom.clientForm.reset();
         dom.clientId.value = '';
+        dom.clientPhone.innerHTML = '<option value="">— Fetch numbers first —</option>';
         dom.verifyResult.style.display = 'none';
+        dom.fetchHint.textContent = 'Enter Account SID & Auth Token above, then click Fetch';
         dom.modalOverlay.style.display = 'flex';
         dom.clientName.focus();
     }
@@ -249,10 +258,14 @@
         dom.clientName.value = client.name;
         dom.clientLabel.value = client.label || '';
         dom.clientSid.value = client.accountSid;
-        dom.clientToken.value = ''; // Don't pre-fill token
+        dom.clientToken.value = '';
         dom.clientToken.placeholder = 'Leave empty to keep current token';
         dom.clientToken.required = false;
-        dom.clientPhone.value = client.phoneNumber;
+
+        // Pre-fill phone dropdown with current number
+        dom.clientPhone.innerHTML = `<option value="${escapeHtml(client.phoneNumber)}">${escapeHtml(client.phoneNumber)}</option>`;
+        dom.fetchHint.textContent = 'Click Fetch to load all numbers from this account';
+
         dom.verifyResult.style.display = 'none';
         dom.modalOverlay.style.display = 'flex';
         dom.clientName.focus();
@@ -262,6 +275,63 @@
         dom.modalOverlay.style.display = 'none';
         dom.clientToken.placeholder = 'Your Twilio Auth Token';
         dom.clientToken.required = true;
+    }
+
+    // ===== Fetch Twilio Numbers =====
+    async function fetchNumbers() {
+        const sid = dom.clientSid.value.trim();
+        const token = dom.clientToken.value.trim();
+        const clientId = dom.clientId.value;
+
+        try {
+            dom.btnFetchNumbers.disabled = true;
+            dom.btnFetchNumbers.innerHTML = '<span class="spinner"></span>';
+
+            let data;
+            if (clientId && !token) {
+                // Use saved client's credentials
+                data = await apiGet(`/api/clients/${clientId}/numbers`);
+            } else if (sid && token) {
+                // Use raw credentials
+                data = await apiPost('/api/clients/fetch-numbers', { accountSid: sid, authToken: token });
+            } else {
+                showToast('Enter Account SID and Auth Token first', 'error');
+                return;
+            }
+
+            if (data.success && data.numbers.length > 0) {
+                const currentVal = dom.clientPhone.value;
+                dom.clientPhone.innerHTML = data.numbers.map(n => {
+                    const label = n.friendlyName && n.friendlyName !== n.phoneNumber
+                        ? `${n.phoneNumber} (${n.friendlyName})`
+                        : n.phoneNumber;
+                    const smsTag = n.smsEnabled ? '' : ' [No SMS]';
+                    return `<option value="${escapeHtml(n.phoneNumber)}" ${n.phoneNumber === currentVal ? 'selected' : ''}>${escapeHtml(label)}${smsTag}</option>`;
+                }).join('');
+
+                dom.fetchHint.textContent = `${data.numbers.length} number${data.numbers.length > 1 ? 's' : ''} found`;
+                dom.fetchHint.style.color = 'var(--success)';
+                showToast(`Found ${data.numbers.length} phone number(s)`, 'success');
+            } else if (data.success) {
+                dom.clientPhone.innerHTML = '<option value="">No numbers found</option>';
+                dom.fetchHint.textContent = 'No phone numbers on this account';
+                dom.fetchHint.style.color = 'var(--warning)';
+                showToast('No phone numbers found on this account', 'info');
+            } else {
+                showToast(data.error || 'Failed to fetch numbers', 'error');
+                dom.fetchHint.textContent = data.error || 'Failed to fetch';
+                dom.fetchHint.style.color = 'var(--danger)';
+            }
+        } catch (err) {
+            showToast('Error: ' + err.message, 'error');
+        } finally {
+            dom.btnFetchNumbers.disabled = false;
+            dom.btnFetchNumbers.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path>
+        </svg>
+        Fetch`;
+        }
     }
 
     async function saveClient(e) {
@@ -275,7 +345,6 @@
             label: dom.clientLabel.value,
         };
 
-        // Only include token if provided
         if (dom.clientToken.value) {
             payload.authToken = dom.clientToken.value;
         }
@@ -298,7 +367,7 @@
             if (data.success) {
                 closeModal();
                 await loadClients();
-                if (!activeClientId && data.client) {
+                if (data.client) {
                     selectClient(data.client.id);
                 }
                 showToast(id ? 'Client updated' : 'Client added', 'success');
@@ -342,7 +411,6 @@
         const token = dom.clientToken.value;
         const id = dom.clientId.value;
 
-        // For verifying, we need either a saved client or SID+token
         if (!id && (!sid || !token)) {
             dom.verifyResult.style.display = 'block';
             dom.verifyResult.className = 'verify-result error';
@@ -350,7 +418,6 @@
             return;
         }
 
-        // If editing and no new token, verify using saved client
         if (id && !token) {
             try {
                 dom.btnVerifyCreds.disabled = true;
@@ -381,10 +448,8 @@
             return;
         }
 
-        // For new clients, we need to save first then verify
-        // Just show a hint
         dom.verifyResult.style.display = 'block';
-        dom.verifyResult.className = 'verify-result info';
+        dom.verifyResult.className = 'verify-result';
         dom.verifyResult.style.background = 'var(--info-bg)';
         dom.verifyResult.style.borderColor = 'rgba(59, 130, 246, 0.2)';
         dom.verifyResult.style.color = 'var(--info)';
@@ -426,7 +491,6 @@
             Status: ${data.message.status} &bull; To: ${data.message.to}
           </span>
         `;
-                // Clear body after successful send
                 dom.smsBody.value = '';
                 updateCharCount();
             } else {
@@ -456,7 +520,7 @@
         dom.segmentPlural.textContent = segments !== 1 ? 's' : '';
     }
 
-    // ===== Message Logs =====
+    // ===== Message Logs (Split View) =====
     async function loadLogs() {
         if (!activeClientId) {
             showToast('Select a client first', 'error');
@@ -471,38 +535,30 @@
 
             const data = await apiGet(`/api/sms/logs/${activeClientId}?limit=${limit}`);
 
-            if (data.success && data.messages.length > 0) {
-                dom.emptyLogs.style.display = 'none';
-                dom.logsTable.style.display = 'table';
+            if (data.success) {
+                // Store all messages for detail view
+                lastLoadedMessages = [...data.outgoing, ...data.incoming];
 
-                const dirFilter = dom.logDirectionFilter.value;
-                let msgs = data.messages;
-                if (dirFilter) {
-                    msgs = msgs.filter(m => m.direction === dirFilter);
-                }
+                // Render outgoing column
+                dom.outgoingLogs.querySelectorAll('.log-card').forEach(el => el.remove());
+                dom.emptyOutgoing.style.display = data.outgoing.length === 0 ? 'flex' : 'none';
+                dom.outgoingCount.textContent = data.outgoingCount;
 
-                dom.logsTableBody.innerHTML = msgs.map(m => `
-          <tr data-sid="${m.sid}" title="Click for details">
-            <td><span class="direction-badge ${m.direction?.includes('outbound') ? 'outbound' : 'inbound'}">${formatDirection(m.direction)}</span></td>
-            <td class="col-phone">${escapeHtml(m.from || '')}</td>
-            <td class="col-phone">${escapeHtml(m.to || '')}</td>
-            <td class="col-body">${escapeHtml(m.body || '')}</td>
-            <td><span class="status-badge ${m.status}">${m.status || ''}</span></td>
-            <td class="col-date">${formatDate(m.dateCreated)}</td>
-            <td class="col-price">${m.price ? `$${Math.abs(parseFloat(m.price)).toFixed(4)}` : '—'}</td>
-          </tr>
-        `).join('');
-
-                // Click handler for rows
-                dom.logsTableBody.querySelectorAll('tr').forEach(row => {
-                    row.addEventListener('click', () => openMessageDetail(row.dataset.sid, data.messages));
+                data.outgoing.forEach(m => {
+                    dom.outgoingLogs.appendChild(createLogCard(m, 'outgoing'));
                 });
 
-                showToast(`Loaded ${msgs.length} messages`, 'success');
-            } else if (data.success) {
-                dom.emptyLogs.style.display = 'flex';
-                dom.logsTable.style.display = 'none';
-                showToast('No messages found', 'info');
+                // Render incoming column
+                dom.incomingLogs.querySelectorAll('.log-card').forEach(el => el.remove());
+                dom.emptyIncomingLogs.style.display = data.incoming.length === 0 ? 'flex' : 'none';
+                dom.incomingLogCount.textContent = data.incomingCount;
+
+                data.incoming.forEach(m => {
+                    dom.incomingLogs.appendChild(createLogCard(m, 'incoming'));
+                });
+
+                const total = data.outgoingCount + data.incomingCount;
+                showToast(`Loaded ${total} messages (${data.outgoingCount} out, ${data.incomingCount} in) for ${data.clientNumber}`, 'success');
             } else {
                 showToast(data.error || 'Failed to load logs', 'error');
             }
@@ -520,8 +576,32 @@
         }
     }
 
-    function openMessageDetail(sid, messages) {
-        const msg = messages.find(m => m.sid === sid);
+    function createLogCard(m, type) {
+        const card = document.createElement('div');
+        card.className = 'log-card';
+        card.dataset.sid = m.sid;
+
+        // For outgoing: show "To" number. For incoming: show "From" number
+        const displayPhone = type === 'outgoing' ? (m.to || '') : (m.from || '');
+
+        card.innerHTML = `
+      <div class="log-card-header">
+        <span class="log-card-phone">${type === 'outgoing' ? '→' : '←'} ${escapeHtml(displayPhone)}</span>
+        <span class="log-card-time">${formatDate(m.dateCreated)}</span>
+      </div>
+      <div class="log-card-body">${escapeHtml(m.body || '')}</div>
+      <div class="log-card-footer">
+        <span class="status-badge ${m.status}">${m.status || ''}</span>
+        <span class="log-card-price">${m.price ? `$${Math.abs(parseFloat(m.price)).toFixed(4)}` : ''}</span>
+      </div>
+    `;
+
+        card.addEventListener('click', () => openMessageDetail(m.sid));
+        return card;
+    }
+
+    function openMessageDetail(sid) {
+        const msg = lastLoadedMessages.find(m => m.sid === sid);
         if (!msg) return;
 
         dom.msgDetailContent.innerHTML = `
@@ -536,7 +616,7 @@
         </div>
         <div class="msg-detail-item">
           <span class="msg-detail-label">Direction</span>
-          <span class="msg-detail-value"><span class="direction-badge ${msg.direction?.includes('outbound') ? 'outbound' : 'inbound'}">${formatDirection(msg.direction)}</span></span>
+          <span class="msg-detail-value">${formatDirection(msg.direction)}</span>
         </div>
         <div class="msg-detail-item">
           <span class="msg-detail-label">Segments</span>
@@ -613,7 +693,6 @@
     function renderIncoming() {
         dom.emptyIncoming.style.display = incomingMessages.length === 0 ? 'flex' : 'none';
 
-        // Remove existing cards (don't remove empty state)
         dom.incomingList.querySelectorAll('.incoming-msg-card').forEach(el => el.remove());
 
         incomingMessages.forEach(msg => {
@@ -659,7 +738,7 @@
         });
 
         // Auto-load logs when switching to logs tab
-        if (tabName === 'logs' && activeClientId && dom.logsTableBody.innerHTML === '') {
+        if (tabName === 'logs' && activeClientId && lastLoadedMessages.length === 0) {
             loadLogs();
         }
     }
@@ -678,6 +757,7 @@
         });
         dom.clientForm.addEventListener('submit', saveClient);
         dom.btnVerifyCreds.addEventListener('click', verifyCreds);
+        dom.btnFetchNumbers.addEventListener('click', fetchNumbers);
 
         // Token toggle
         dom.btnToggleToken.addEventListener('click', () => {
@@ -703,9 +783,6 @@
 
         // Logs
         dom.btnRefreshLogs.addEventListener('click', loadLogs);
-        dom.logDirectionFilter.addEventListener('change', () => {
-            if (dom.logsTableBody.innerHTML) loadLogs();
-        });
 
         // Incoming
         dom.btnCopyWebhook.addEventListener('click', () => {
@@ -713,7 +790,6 @@
             navigator.clipboard.writeText(url).then(() => {
                 showToast('Webhook URL copied!', 'success');
             }).catch(() => {
-                // Fallback
                 const el = document.createElement('textarea');
                 el.value = url;
                 document.body.appendChild(el);
@@ -757,8 +833,8 @@
     function formatDirection(dir) {
         if (!dir) return '—';
         const map = {
-            'outbound-api': '↑ API',
-            'outbound-reply': '↑ Reply',
+            'outbound-api': '↑ Outbound (API)',
+            'outbound-reply': '↑ Outbound (Reply)',
             'inbound': '↓ Inbound',
         };
         return map[dir] || dir;

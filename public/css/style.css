@@ -295,14 +295,16 @@ body {
 }
 
 .client-item-label {
-  font-size: 0.65rem;
-  padding: 2px 6px;
-  border-radius: 4px;
+  font-size: 0.6rem;
+  padding: 1px 5px;
+  border-radius: 3px;
   background: var(--warning-bg);
   color: var(--warning);
-  font-weight: 500;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  vertical-align: middle;
+  margin-left: 4px;
 }
 
 .client-item-actions {
@@ -786,102 +788,119 @@ body {
   width: auto;
 }
 
-.logs-table-container {
+.logs-split-view {
   flex: 1;
-  overflow: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  overflow: hidden;
+}
+
+.logs-column {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-radius: var(--radius-md);
   border: 1px solid var(--surface-border);
   background: var(--bg-card);
 }
 
-.logs-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.84rem;
-}
-
-.logs-table thead {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-.logs-table th {
-  background: var(--bg-tertiary);
-  padding: 10px 14px;
-  text-align: left;
-  font-size: 0.75rem;
+.logs-column-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 0.82rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-secondary);
   border-bottom: 1px solid var(--surface-border);
-  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.logs-table td {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--surface-border-light);
-  color: var(--text-secondary);
-  vertical-align: top;
+.logs-column-header.outbound-header {
+  background: var(--info-bg);
+  color: var(--info);
+  border-bottom-color: rgba(59, 130, 246, 0.15);
 }
 
-.logs-table tbody tr {
+.logs-column-header.inbound-header {
+  background: var(--success-bg);
+  color: var(--success);
+  border-bottom-color: rgba(16, 185, 129, 0.15);
+}
+
+.logs-column-count {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.logs-column-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.log-card {
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--surface-border-light);
+  margin-bottom: 6px;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: all 0.15s ease;
+  background: transparent;
 }
 
-.logs-table tbody tr:hover {
+.log-card:hover {
   background: var(--bg-hover);
+  border-color: var(--accent);
 }
 
-.logs-table .col-body {
-  max-width: 280px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.log-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
 }
 
-.logs-table .col-phone {
+.log-card-phone {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
-  white-space: nowrap;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
-.logs-table .col-date {
-  font-size: 0.78rem;
-  white-space: nowrap;
-  color: var(--text-muted);
-}
-
-.logs-table .col-price {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
+.log-card-time {
+  font-size: 0.72rem;
   color: var(--text-dim);
 }
 
-/* Direction badges */
-.direction-badge {
-  display: inline-flex;
+.log-card-body {
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.log-card-footer {
+  display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border-radius: 4px;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+.log-card-price {
+  font-family: var(--font-mono);
   font-size: 0.72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-
-.direction-badge.outbound {
-  background: var(--info-bg);
-  color: var(--info);
-}
-
-.direction-badge.inbound {
-  background: var(--success-bg);
-  color: var(--success);
+  color: var(--text-dim);
 }
 
 /* Status badges */
@@ -919,6 +938,30 @@ body {
 .status-badge.received {
   background: var(--success-bg);
   color: var(--success);
+}
+
+/* Mini empty state */
+.empty-state.mini {
+  padding: 24px 16px;
+}
+
+.empty-state.mini p {
+  font-size: 0.82rem;
+  margin-top: 0;
+}
+
+/* Fetch Numbers Row */
+.fetch-numbers-row {
+  display: flex;
+  gap: 8px;
+}
+
+.fetch-numbers-row .select-input {
+  flex: 1;
+}
+
+.fetch-numbers-row .btn {
+  flex-shrink: 0;
 }
 
 /* ===== Incoming Panel ===== */

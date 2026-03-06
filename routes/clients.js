@@ -138,4 +138,67 @@ router.post('/:id/verify', async (req, res) => {
     }
 });
 
+// POST /api/clients/fetch-numbers — fetch phone numbers using raw credentials (before saving)
+router.post('/fetch-numbers', async (req, res) => {
+    try {
+        const { accountSid, authToken } = req.body;
+
+        if (!accountSid || !authToken) {
+            return res.status(400).json({
+                success: false,
+                error: 'Account SID and Auth Token are required'
+            });
+        }
+
+        const twilio = require('twilio')(accountSid.trim(), authToken.trim());
+        const numbers = await twilio.incomingPhoneNumbers.list({ limit: 50 });
+
+        const formatted = numbers.map(n => ({
+            sid: n.sid,
+            phoneNumber: n.phoneNumber,
+            friendlyName: n.friendlyName,
+            smsEnabled: n.capabilities?.sms || false,
+            mmsEnabled: n.capabilities?.mms || false,
+        }));
+
+        res.json({ success: true, numbers: formatted });
+    } catch (err) {
+        res.status(400).json({
+            success: false,
+            error: 'Failed to fetch numbers: ' + err.message
+        });
+    }
+});
+
+// GET /api/clients/:id/numbers — fetch phone numbers for a saved client
+router.get('/:id/numbers', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const clients = readClients();
+        const client = clients.find(c => c.id === id);
+
+        if (!client) {
+            return res.status(404).json({ success: false, error: 'Client not found' });
+        }
+
+        const twilio = require('twilio')(client.accountSid, client.authToken);
+        const numbers = await twilio.incomingPhoneNumbers.list({ limit: 50 });
+
+        const formatted = numbers.map(n => ({
+            sid: n.sid,
+            phoneNumber: n.phoneNumber,
+            friendlyName: n.friendlyName,
+            smsEnabled: n.capabilities?.sms || false,
+            mmsEnabled: n.capabilities?.mms || false,
+        }));
+
+        res.json({ success: true, numbers: formatted });
+    } catch (err) {
+        res.status(400).json({
+            success: false,
+            error: 'Failed to fetch numbers: ' + err.message
+        });
+    }
+});
+
 module.exports = router;

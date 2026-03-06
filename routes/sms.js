@@ -66,25 +66,13 @@ router.get('/logs/:clientId', async (req, res) => {
         if (dateSentAfter) baseFilters.dateSentAfter = new Date(dateSentAfter);
         if (dateSentBefore) baseFilters.dateSentBefore = new Date(dateSentBefore);
 
-        // Fetch messages sent FROM and received TO the client's phone number
-        const [sentMessages, receivedMessages] = await Promise.all([
+        // Fetch outgoing (FROM client, direction=outbound-api) and incoming (TO client, direction=inbound) separately
+        const [sentRaw, receivedRaw] = await Promise.all([
             twilio.messages.list({ ...baseFilters, from: client.phoneNumber, limit: perQueryLimit }),
             twilio.messages.list({ ...baseFilters, to: client.phoneNumber, limit: perQueryLimit })
         ]);
 
-        // Merge and deduplicate by SID
-        const seen = new Set();
-        const allMessages = [...sentMessages, ...receivedMessages].filter(m => {
-            if (seen.has(m.sid)) return false;
-            seen.add(m.sid);
-            return true;
-        });
-
-        // Sort by date (newest first) and apply limit
-        allMessages.sort((a, b) => new Date(b.dateCreated) - new Date(a.dateCreated));
-        const limited = allMessages.slice(0, perQueryLimit);
-
-        const formatted = limited.map(m => ({
+        const formatMsg = m => ({
             sid: m.sid,
             status: m.status,
             to: m.to,
@@ -99,9 +87,35 @@ router.get('/logs/:clientId', async (req, res) => {
             dateUpdated: m.dateUpdated,
             errorCode: m.errorCode,
             errorMessage: m.errorMessage
-        }));
+        });
 
-        res.json({ success: true, messages: formatted, count: formatted.length });
+        // Deduplicate each list by SID, sort newest first
+        const dedup = (list) => {
+            const seen = new Set();
+            return list.filter(m => {
+                if (seen.has(m.sid)) return false;
+                seen.add(m.sid);
+                return true;
+            });
+        };
+
+        const outgoing = dedup(sentRaw)
+            .filter(m => m.direction === 'outbound-api')
+            .sort((a, b) => new Date(b.dateCreated) - new Date(a.dateCreated))
+            .map(formatMsg);
+        const incoming = dedup(receivedRaw)
+            .filter(m => m.direction === 'inbound')
+            .sort((a, b) => new Date(b.dateCreated) - new Date(a.dateCreated))
+            .map(formatMsg);
+
+        res.json({
+            success: true,
+            outgoing,
+            incoming,
+            outgoingCount: outgoing.length,
+            incomingCount: incoming.length,
+            clientNumber: client.phoneNumber
+        });
     } catch (err) {
         res.status(400).json({ success: false, error: err.message });
     }

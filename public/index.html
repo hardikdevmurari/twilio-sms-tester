@@ -171,12 +171,6 @@
               <h3>Message Logs</h3>
             </div>
             <div class="toolbar-right">
-              <select id="log-direction-filter" class="input select-input">
-                <option value="">All Directions</option>
-                <option value="outbound-api">Outbound (API)</option>
-                <option value="outbound-reply">Outbound (Reply)</option>
-                <option value="inbound">Inbound</option>
-              </select>
               <input type="number" id="log-limit" class="input" value="50" min="1" max="200" style="width: 80px;"
                 title="Max results">
               <button class="btn btn-secondary" id="btn-refresh-logs">
@@ -190,29 +184,43 @@
               </button>
             </div>
           </div>
-          <div class="logs-table-container" id="logs-table-container">
-            <div class="empty-state" id="empty-logs">
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-              </svg>
-              <p>No messages yet</p>
-              <span>Click Refresh to load message logs</span>
+          <div class="logs-split-view" id="logs-split-view">
+            <!-- Outgoing Column -->
+            <div class="logs-column">
+              <div class="logs-column-header outbound-header">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"></line>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+                <span>Outgoing</span>
+                <span class="logs-column-count" id="outgoing-count">0</span>
+              </div>
+              <div class="logs-column-body" id="outgoing-logs">
+                <div class="empty-state mini" id="empty-outgoing">
+                  <p>No outgoing messages</p>
+                </div>
+              </div>
             </div>
-            <table class="logs-table" id="logs-table" style="display:none;">
-              <thead>
-                <tr>
-                  <th>Direction</th>
-                  <th>From</th>
-                  <th>To</th>
-                  <th>Body</th>
-                  <th>Status</th>
-                  <th>Date</th>
-                  <th>Price</th>
-                </tr>
-              </thead>
-              <tbody id="logs-table-body"></tbody>
-            </table>
+            <!-- Incoming Column -->
+            <div class="logs-column">
+              <div class="logs-column-header inbound-header">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline>
+                  <path
+                    d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z">
+                  </path>
+                </svg>
+                <span>Incoming</span>
+                <span class="logs-column-count" id="incoming-log-count">0</span>
+              </div>
+              <div class="logs-column-body" id="incoming-logs">
+                <div class="empty-state mini" id="empty-incoming-logs">
+                  <p>No incoming messages</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -300,8 +308,22 @@
           </button>
         </div>
         <div class="form-group">
-          <label for="client-phone">Twilio Phone Number *</label>
-          <input type="tel" id="client-phone" placeholder="+1234567890" class="input" required>
+          <label>Twilio Phone Number *</label>
+          <div class="fetch-numbers-row">
+            <select id="client-phone" class="input select-input" required>
+              <option value="">— Fetch numbers first —</option>
+            </select>
+            <button type="button" class="btn btn-secondary" id="btn-fetch-numbers">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path
+                  d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z">
+                </path>
+              </svg>
+              Fetch
+            </button>
+          </div>
+          <span class="input-hint" id="fetch-hint">Enter Account SID & Auth Token above, then click Fetch</span>
         </div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" id="btn-verify-creds">
