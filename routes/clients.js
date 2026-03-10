@@ -190,6 +190,10 @@ router.get('/:id/numbers', async (req, res) => {
             friendlyName: n.friendlyName,
             smsEnabled: n.capabilities?.sms || false,
             mmsEnabled: n.capabilities?.mms || false,
+            smsUrl: n.smsUrl || '',
+            smsMethod: n.smsMethod || 'POST',
+            voiceUrl: n.voiceUrl || '',
+            voiceMethod: n.voiceMethod || 'POST',
         }));
 
         res.json({ success: true, numbers: formatted });
@@ -197,6 +201,48 @@ router.get('/:id/numbers', async (req, res) => {
         res.status(400).json({
             success: false,
             error: 'Failed to fetch numbers: ' + err.message
+        });
+    }
+});
+
+// PUT /api/clients/:id/numbers/:numberSid/webhook — update SMS and Voice webhooks
+router.put('/:id/numbers/:numberSid/webhook', async (req, res) => {
+    try {
+        const { id, numberSid } = req.params;
+        const { smsUrl, voiceUrl, smsMethod, voiceMethod } = req.body;
+
+        const clients = readClients();
+        const client = clients.find(c => c.id === id);
+
+        if (!client) {
+            return res.status(404).json({ success: false, error: 'Client not found' });
+        }
+
+        const twilio = require('twilio')(client.accountSid, client.authToken);
+
+        const updatePayload = {};
+        if (smsUrl !== undefined) updatePayload.smsUrl = smsUrl;
+        if (voiceUrl !== undefined) updatePayload.voiceUrl = voiceUrl;
+        if (smsMethod) updatePayload.smsMethod = smsMethod;
+        if (voiceMethod) updatePayload.voiceMethod = voiceMethod;
+
+        const updated = await twilio.incomingPhoneNumbers(numberSid).update(updatePayload);
+
+        res.json({
+            success: true,
+            number: {
+                sid: updated.sid,
+                phoneNumber: updated.phoneNumber,
+                smsUrl: updated.smsUrl || '',
+                smsMethod: updated.smsMethod || 'POST',
+                voiceUrl: updated.voiceUrl || '',
+                voiceMethod: updated.voiceMethod || 'POST',
+            }
+        });
+    } catch (err) {
+        res.status(400).json({
+            success: false,
+            error: 'Failed to update webhook: ' + err.message
         });
     }
 });
