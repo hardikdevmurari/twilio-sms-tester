@@ -44,6 +44,11 @@
         btnSendSms: $('#btn-send-sms'),
         sendResult: $('#send-result'),
 
+        // Webhooks
+        webhooksList: $('#webhooks-list'),
+        emptyWebhooks: $('#empty-webhooks'),
+        btnRefreshWebhooks: $('#btn-refresh-webhooks'),
+
         // Logs — split view
         logLimit: $('#log-limit'),
         btnRefreshLogs: $('#btn-refresh-logs'),
@@ -223,8 +228,10 @@
             el.classList.toggle('active', el.dataset.id === id);
         });
 
-        // Clear previous logs
+        // Clear previous logs and webhooks
         clearLogColumns();
+        dom.webhooksList.querySelectorAll('.webhook-row').forEach(el => el.remove());
+        dom.emptyWebhooks.style.display = 'flex';
         dom.sendResult.style.display = 'none';
     }
 
@@ -741,6 +748,11 @@
         if (tabName === 'logs' && activeClientId && lastLoadedMessages.length === 0) {
             loadLogs();
         }
+
+        // Auto-load webhooks when switching to webhooks tab
+        if (tabName === 'webhooks' && activeClientId) {
+            loadWebhooks();
+        }
     }
 
     // ===== Event Listeners =====
@@ -784,6 +796,9 @@
         // Logs
         dom.btnRefreshLogs.addEventListener('click', loadLogs);
 
+        // Webhooks
+        dom.btnRefreshWebhooks.addEventListener('click', loadWebhooks);
+
         // Incoming
         dom.btnCopyWebhook.addEventListener('click', () => {
             const url = `${window.location.origin}/api/sms/webhook/incoming`;
@@ -821,6 +836,174 @@
                 dom.msgModalOverlay.style.display = 'none';
             }
         });
+    }
+
+    // ===== Webhook Manager =====
+    async function loadWebhooks() {
+        if (!activeClientId) {
+            showToast('Select a client first', 'error');
+            return;
+        }
+
+        try {
+            dom.btnRefreshWebhooks.disabled = true;
+            dom.btnRefreshWebhooks.innerHTML = '<span class="spinner"></span> Loading...';
+
+            const data = await apiGet(`/api/clients/${activeClientId}/numbers`);
+
+            if (data.success) {
+                dom.webhooksList.querySelectorAll('.webhook-row').forEach(el => el.remove());
+                dom.emptyWebhooks.style.display = data.numbers.length === 0 ? 'flex' : 'none';
+
+                data.numbers.forEach(n => {
+                    dom.webhooksList.appendChild(createWebhookRow(n));
+                });
+
+                if (data.numbers.length > 0) {
+                    showToast(`Loaded ${data.numbers.length} number(s)`, 'success');
+                }
+            } else {
+                showToast(data.error || 'Failed to load numbers', 'error');
+            }
+        } catch (err) {
+            showToast('Error loading numbers: ' + err.message, 'error');
+        } finally {
+            dom.btnRefreshWebhooks.disabled = false;
+            dom.btnRefreshWebhooks.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"></polyline>
+          <polyline points="1 20 1 14 7 14"></polyline>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+        Refresh`;
+        }
+    }
+
+    function createWebhookRow(number) {
+        const row = document.createElement('div');
+        row.className = 'webhook-row';
+        row.dataset.sid = number.sid;
+
+        row.innerHTML = `
+      <div class="webhook-row-header">
+        <div class="webhook-number-info">
+          <span class="webhook-number">${escapeHtml(number.phoneNumber)}</span>
+          ${number.friendlyName && number.friendlyName !== number.phoneNumber
+            ? `<span class="webhook-friendly">${escapeHtml(number.friendlyName)}</span>`
+            : ''}
+          <span class="webhook-sid mono">${escapeHtml(number.sid)}</span>
+        </div>
+        <button class="btn btn-secondary btn-sm btn-edit-webhook" data-sid="${escapeHtml(number.sid)}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+          </svg>
+          Edit
+        </button>
+      </div>
+      <div class="webhook-urls">
+        <div class="webhook-url-row">
+          <span class="webhook-url-label">SMS</span>
+          <span class="webhook-url-value mono" id="sms-url-display-${escapeHtml(number.sid)}">${escapeHtml(number.smsUrl || '—')}</span>
+        </div>
+        <div class="webhook-url-row">
+          <span class="webhook-url-label">Voice</span>
+          <span class="webhook-url-value mono" id="voice-url-display-${escapeHtml(number.sid)}">${escapeHtml(number.voiceUrl || '—')}</span>
+        </div>
+      </div>
+      <div class="webhook-edit-form" id="webhook-edit-${escapeHtml(number.sid)}" style="display:none;">
+        <div class="form-group">
+          <label>SMS Webhook URL</label>
+          <input type="url" class="input webhook-sms-input" placeholder="https://yourapp.com/sms" value="${escapeHtml(number.smsUrl || '')}">
+        </div>
+        <div class="form-group">
+          <label>Voice Webhook URL</label>
+          <input type="url" class="input webhook-voice-input" placeholder="https://yourapp.com/voice" value="${escapeHtml(number.voiceUrl || '')}">
+        </div>
+        <div class="webhook-edit-actions">
+          <button class="btn btn-ghost btn-sm btn-cancel-webhook">Cancel</button>
+          <button class="btn btn-primary btn-sm btn-save-webhook" data-sid="${escapeHtml(number.sid)}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+              <polyline points="17 21 17 13 7 13 7 21"></polyline>
+              <polyline points="7 3 7 8 15 8"></polyline>
+            </svg>
+            Save Webhooks
+          </button>
+        </div>
+      </div>
+    `;
+
+        const editForm = row.querySelector(`#webhook-edit-${number.sid}`);
+        const editBtn = row.querySelector('.btn-edit-webhook');
+        const cancelBtn = row.querySelector('.btn-cancel-webhook');
+        const saveBtn = row.querySelector('.btn-save-webhook');
+
+        editBtn.addEventListener('click', () => {
+            editForm.style.display = editForm.style.display === 'none' ? 'block' : 'none';
+            editBtn.textContent = editForm.style.display === 'none' ? 'Edit' : 'Close';
+        });
+
+        cancelBtn.addEventListener('click', () => {
+            editForm.style.display = 'none';
+            editBtn.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+          </svg>
+          Edit`;
+        });
+
+        saveBtn.addEventListener('click', async () => {
+            const smsUrl = row.querySelector('.webhook-sms-input').value.trim();
+            const voiceUrl = row.querySelector('.webhook-voice-input').value.trim();
+            const sid = saveBtn.dataset.sid;
+
+            try {
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = '<span class="spinner"></span> Saving...';
+
+                const data = await apiPut(`/api/clients/${activeClientId}/numbers/${sid}/webhook`, {
+                    smsUrl,
+                    voiceUrl
+                });
+
+                if (data.success) {
+                    // Update displayed values
+                    document.getElementById(`sms-url-display-${sid}`).textContent = data.number.smsUrl || '—';
+                    document.getElementById(`voice-url-display-${sid}`).textContent = data.number.voiceUrl || '—';
+                    editForm.style.display = 'none';
+                    editBtn.innerHTML = `
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+              </svg>
+              Edit`;
+                    showToast('Webhooks updated successfully', 'success');
+                } else {
+                    showToast(data.error || 'Failed to update webhooks', 'error');
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = `
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+              <polyline points="17 21 17 13 7 13 7 21"></polyline>
+              <polyline points="7 3 7 8 15 8"></polyline>
+            </svg>
+            Save Webhooks`;
+            }
+        });
+
+        return row;
     }
 
     // ===== Utilities =====
