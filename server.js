@@ -4,13 +4,12 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const path = require('path');
 
-const clientsRouter = require('./routes/clients');
+const proxyRouter = require('./routes/proxy');
 const smsRouter = require('./routes/sms');
 
 const app = express();
 const PORT = process.env.PORT || 3456;
 
-// Middleware
 app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
@@ -18,8 +17,8 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // Serve static frontend
 app.use(express.static(path.join(__dirname, 'public')));
 
-// API Routes
-app.use('/api/clients', clientsRouter);
+// API Routes — stateless Twilio proxy + webhook receiver
+app.use('/api/proxy', proxyRouter);
 app.use('/api/sms', smsRouter);
 
 // Health check

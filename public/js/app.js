@@ -1,13 +1,16 @@
 // ===== Twilio SMS Tester — Frontend App =====
+// Clients are stored in localStorage. The server is a stateless Twilio proxy.
 (function () {
     'use strict';
 
     const API = '';
+    const LS_KEY = 'twilio_tester_clients';
+
     let activeClientId = null;
     let clients = [];
     let incomingMessages = [];
     let eventSource = null;
-    let lastLoadedMessages = []; // store for detail view
+    let lastLoadedMessages = [];
 
     // ===== DOM Elements =====
     const $ = (sel) => document.querySelector(sel);
@@ -100,9 +103,8 @@
         setupEventListeners();
         setupSSE();
         updateWebhookUrl();
-        await loadClients();
+        loadClients();
 
-        // Restore active client
         const savedId = localStorage.getItem('twilio_tester_active_client');
         if (savedId && clients.find(c => c.id === savedId)) {
             selectClient(savedId);
@@ -110,11 +112,6 @@
     }
 
     // ===== API Helpers =====
-    async function apiGet(url) {
-        const res = await fetch(API + url);
-        return res.json();
-    }
-
     async function apiPost(url, data) {
         const res = await fetch(API + url, {
             method: 'POST',
@@ -133,22 +130,28 @@
         return res.json();
     }
 
-    async function apiDelete(url) {
-        const res = await fetch(API + url, { method: 'DELETE' });
-        return res.json();
+    // ===== localStorage Client Storage =====
+    function lsGetClients() {
+        try {
+            return JSON.parse(localStorage.getItem(LS_KEY) || '[]');
+        } catch {
+            return [];
+        }
+    }
+
+    function lsSaveClients(list) {
+        localStorage.setItem(LS_KEY, JSON.stringify(list));
+    }
+
+    // Return the active client's full credentials (for passing to proxy)
+    function getActiveCreds() {
+        return clients.find(c => c.id === activeClientId) || null;
     }
 
     // ===== Clients =====
-    async function loadClients() {
-        try {
-            const data = await apiGet('/api/clients');
-            if (data.success) {
-                clients = data.clients;
-                renderClientList();
-            }
-        } catch (err) {
-            showToast('Failed to load clients', 'error');
-        }
+    function loadClients() {
+        clients = lsGetClients();
+        renderClientList();
     }
 
     function renderClientList() {
@@ -228,7 +231,6 @@
             el.classList.toggle('active', el.dataset.id === id);
         });
 
-        // Clear previous logs and webhooks
         clearLogColumns();
         dom.webhooksList.querySelectorAll('.webhook-row').forEach(el => el.remove());
         dom.emptyWebhooks.style.display = 'flex';
@@ -249,9 +251,12 @@
         dom.modalTitle.textContent = 'Add Client';
         dom.clientForm.reset();
         dom.clientId.value = '';
+        dom.clientToken.required = true;
+        dom.clientToken.placeholder = 'Your Twilio Auth Token';
         dom.clientPhone.innerHTML = '<option value="">— Fetch numbers first —</option>';
         dom.verifyResult.style.display = 'none';
         dom.fetchHint.textContent = 'Enter Account SID & Auth Token above, then click Fetch';
+        dom.fetchHint.style.color = '';
         dom.modalOverlay.style.display = 'flex';
         dom.clientName.focus();
     }
@@ -265,13 +270,13 @@
         dom.clientName.value = client.name;
         dom.clientLabel.value = client.label || '';
         dom.clientSid.value = client.accountSid;
-        dom.clientToken.value = '';
-        dom.clientToken.placeholder = 'Leave empty to keep current token';
-        dom.clientToken.required = false;
+        dom.clientToken.value = client.authToken; // pre-fill from localStorage
+        dom.clientToken.required = true;
+        dom.clientToken.placeholder = 'Your Twilio Auth Token';
 
-        // Pre-fill phone dropdown with current number
         dom.clientPhone.innerHTML = `<option value="${escapeHtml(client.phoneNumber)}">${escapeHtml(client.phoneNumber)}</option>`;
-        dom.fetchHint.textContent = 'Click Fetch to load all numbers from this account';
+        dom.fetchHint.textContent = 'Click Fetch to reload numbers from this account';
+        dom.fetchHint.style.color = '';
 
         dom.verifyResult.style.display = 'none';
         dom.modalOverlay.style.display = 'flex';
@@ -288,23 +293,17 @@
     async function fetchNumbers() {
         const sid = dom.clientSid.value.trim();
         const token = dom.clientToken.value.trim();
-        const clientId = dom.clientId.value;
+
+        if (!sid || !token) {
+            showToast('Enter Account SID and Auth Token first', 'error');
+            return;
+        }
 
         try {
             dom.btnFetchNumbers.disabled = true;
             dom.btnFetchNumbers.innerHTML = '<span class="spinner"></span>';
 
-            let data;
-            if (clientId && !token) {
-                // Use saved client's credentials
-                data = await apiGet(`/api/clients/${clientId}/numbers`);
-            } else if (sid && token) {
-                // Use raw credentials
-                data = await apiPost('/api/clients/fetch-numbers', { accountSid: sid, authToken: token });
-            } else {
-                showToast('Enter Account SID and Auth Token first', 'error');
-                return;
-            }
+            const data = await apiPost('/api/proxy/numbers', { accountSid: sid, authToken: token });
 
             if (data.success && data.numbers.length > 0) {
                 const currentVal = dom.clientPhone.value;
@@ -315,7 +314,6 @@
                     const smsTag = n.smsEnabled ? '' : ' [No SMS]';
                     return `<option value="${escapeHtml(n.phoneNumber)}" ${n.phoneNumber === currentVal ? 'selected' : ''}>${escapeHtml(label)}${smsTag}</option>`;
                 }).join('');
-
                 dom.fetchHint.textContent = `${data.numbers.length} number${data.numbers.length > 1 ? 's' : ''} found`;
                 dom.fetchHint.style.color = 'var(--success)';
                 showToast(`Found ${data.numbers.length} phone number(s)`, 'success');
@@ -323,7 +321,6 @@
                 dom.clientPhone.innerHTML = '<option value="">No numbers found</option>';
                 dom.fetchHint.textContent = 'No phone numbers on this account';
                 dom.fetchHint.style.color = 'var(--warning)';
-                showToast('No phone numbers found on this account', 'info');
             } else {
                 showToast(data.error || 'Failed to fetch numbers', 'error');
                 dom.fetchHint.textContent = data.error || 'Failed to fetch';
@@ -345,122 +342,113 @@
         e.preventDefault();
 
         const id = dom.clientId.value;
-        const payload = {
-            name: dom.clientName.value,
-            accountSid: dom.clientSid.value,
-            phoneNumber: dom.clientPhone.value,
-            label: dom.clientLabel.value,
-        };
+        const name = dom.clientName.value.trim();
+        const accountSid = dom.clientSid.value.trim();
+        const authToken = dom.clientToken.value.trim();
+        const phoneNumber = dom.clientPhone.value.trim();
+        const label = dom.clientLabel.value.trim();
 
-        if (dom.clientToken.value) {
-            payload.authToken = dom.clientToken.value;
+        if (!name || !accountSid || !authToken || !phoneNumber) {
+            showToast('All fields are required', 'error');
+            return;
         }
 
-        try {
-            dom.btnSaveClient.disabled = true;
-            dom.btnSaveClient.innerHTML = '<span class="spinner"></span> Saving...';
+        dom.btnSaveClient.disabled = true;
+        dom.btnSaveClient.innerHTML = '<span class="spinner"></span> Saving...';
 
-            let data;
-            if (id) {
-                data = await apiPut(`/api/clients/${id}`, payload);
-            } else {
-                if (!dom.clientToken.value) {
-                    showToast('Auth Token is required for new clients', 'error');
-                    return;
-                }
-                data = await apiPost('/api/clients', payload);
-            }
+        const allClients = lsGetClients();
 
-            if (data.success) {
-                closeModal();
-                await loadClients();
-                if (data.client) {
-                    selectClient(data.client.id);
-                }
-                showToast(id ? 'Client updated' : 'Client added', 'success');
-            } else {
-                showToast(data.error || 'Failed to save', 'error');
+        if (id) {
+            // Update existing
+            const index = allClients.findIndex(c => c.id === id);
+            if (index !== -1) {
+                allClients[index] = { ...allClients[index], name, accountSid, authToken, phoneNumber, label, updatedAt: new Date().toISOString() };
             }
-        } catch (err) {
-            showToast('Error saving client: ' + err.message, 'error');
-        } finally {
-            dom.btnSaveClient.disabled = false;
-            dom.btnSaveClient.textContent = 'Save Client';
+        } else {
+            // Add new
+            allClients.push({
+                id: crypto.randomUUID(),
+                name,
+                accountSid,
+                authToken,
+                phoneNumber,
+                label,
+                createdAt: new Date().toISOString()
+            });
         }
+
+        lsSaveClients(allClients);
+        loadClients();
+
+        const saved = allClients.find(c => (id ? c.id === id : c.name === name && c.accountSid === accountSid));
+        if (saved) selectClient(saved.id);
+
+        closeModal();
+        showToast(id ? 'Client updated' : 'Client added', 'success');
+
+        dom.btnSaveClient.disabled = false;
+        dom.btnSaveClient.textContent = 'Save Client';
     }
 
-    async function deleteClient(id) {
+    function deleteClient(id) {
         const client = clients.find(c => c.id === id);
         if (!client) return;
 
         if (!confirm(`Delete "${client.name}"? This cannot be undone.`)) return;
 
-        try {
-            const data = await apiDelete(`/api/clients/${id}`);
-            if (data.success) {
-                if (activeClientId === id) {
-                    activeClientId = null;
-                    localStorage.removeItem('twilio_tester_active_client');
-                    dom.activeClientName.textContent = 'No client selected';
-                    dom.workspace.style.display = 'none';
-                    dom.welcomeState.style.display = 'flex';
-                }
-                await loadClients();
-                showToast(`"${client.name}" deleted`, 'info');
-            }
-        } catch (err) {
-            showToast('Error deleting client', 'error');
+        const updated = lsGetClients().filter(c => c.id !== id);
+        lsSaveClients(updated);
+
+        if (activeClientId === id) {
+            activeClientId = null;
+            localStorage.removeItem('twilio_tester_active_client');
+            dom.activeClientName.textContent = 'No client selected';
+            dom.workspace.style.display = 'none';
+            dom.welcomeState.style.display = 'flex';
         }
+
+        loadClients();
+        showToast(`"${client.name}" deleted`, 'info');
     }
 
     async function verifyCreds() {
-        const sid = dom.clientSid.value;
-        const token = dom.clientToken.value;
-        const id = dom.clientId.value;
+        const sid = dom.clientSid.value.trim();
+        const token = dom.clientToken.value.trim();
 
-        if (!id && (!sid || !token)) {
+        if (!sid || !token) {
             dom.verifyResult.style.display = 'block';
             dom.verifyResult.className = 'verify-result error';
             dom.verifyResult.textContent = 'Please fill in Account SID and Auth Token first';
             return;
         }
 
-        if (id && !token) {
-            try {
-                dom.btnVerifyCreds.disabled = true;
-                dom.btnVerifyCreds.innerHTML = '<span class="spinner"></span> Verifying...';
+        try {
+            dom.btnVerifyCreds.disabled = true;
+            dom.btnVerifyCreds.innerHTML = '<span class="spinner"></span> Verifying...';
 
-                const data = await apiPost(`/api/clients/${id}/verify`, {});
-                dom.verifyResult.style.display = 'block';
-                if (data.success) {
-                    dom.verifyResult.className = 'verify-result success';
-                    dom.verifyResult.textContent = `✓ Verified: ${data.account.friendlyName} (${data.account.status})`;
-                } else {
-                    dom.verifyResult.className = 'verify-result error';
-                    dom.verifyResult.textContent = `✗ ${data.error}`;
-                }
-            } catch (err) {
-                dom.verifyResult.style.display = 'block';
+            const data = await apiPost('/api/proxy/verify', { accountSid: sid, authToken: token });
+
+            dom.verifyResult.style.display = 'block';
+            if (data.success) {
+                dom.verifyResult.className = 'verify-result success';
+                dom.verifyResult.textContent = `✓ Verified: ${data.account.friendlyName} (${data.account.status})`;
+            } else {
                 dom.verifyResult.className = 'verify-result error';
-                dom.verifyResult.textContent = `✗ Verification failed: ${err.message}`;
-            } finally {
-                dom.btnVerifyCreds.disabled = false;
-                dom.btnVerifyCreds.innerHTML = `
+                dom.verifyResult.textContent = `✗ ${data.error}`;
+            }
+        } catch (err) {
+            dom.verifyResult.style.display = 'block';
+            dom.verifyResult.className = 'verify-result error';
+            dom.verifyResult.textContent = `✗ Verification failed: ${err.message}`;
+        } finally {
+            dom.btnVerifyCreds.disabled = false;
+            dom.btnVerifyCreds.innerHTML = `
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
             <polyline points="22 4 12 14.01 9 11.01"></polyline>
           </svg>
           Verify`;
-            }
-            return;
         }
-
-        dom.verifyResult.style.display = 'block';
-        dom.verifyResult.className = 'verify-result';
-        dom.verifyResult.style.background = 'var(--info-bg)';
-        dom.verifyResult.style.borderColor = 'rgba(59, 130, 246, 0.2)';
-        dom.verifyResult.style.color = 'var(--info)';
-        dom.verifyResult.textContent = 'Save the client first, then use Verify to check credentials.';
     }
 
     // ===== Send SMS =====
@@ -469,6 +457,9 @@
             showToast('Select a client first', 'error');
             return;
         }
+
+        const creds = getActiveCreds();
+        if (!creds) { showToast('Client not found', 'error'); return; }
 
         const to = dom.smsTo.value.trim();
         const body = dom.smsBody.value.trim();
@@ -482,8 +473,10 @@
             dom.btnSendSms.disabled = true;
             dom.btnSendSms.innerHTML = '<span class="spinner"></span> Sending...';
 
-            const data = await apiPost('/api/sms/send', {
-                clientId: activeClientId,
+            const data = await apiPost('/api/proxy/sms/send', {
+                accountSid: creds.accountSid,
+                authToken: creds.authToken,
+                from: creds.phoneNumber,
                 to,
                 body,
             });
@@ -527,12 +520,15 @@
         dom.segmentPlural.textContent = segments !== 1 ? 's' : '';
     }
 
-    // ===== Message Logs (Split View) =====
+    // ===== Message Logs =====
     async function loadLogs() {
         if (!activeClientId) {
             showToast('Select a client first', 'error');
             return;
         }
+
+        const creds = getActiveCreds();
+        if (!creds) { showToast('Client not found', 'error'); return; }
 
         const limit = dom.logLimit.value || 50;
 
@@ -540,29 +536,25 @@
             dom.btnRefreshLogs.disabled = true;
             dom.btnRefreshLogs.innerHTML = '<span class="spinner"></span> Loading...';
 
-            const data = await apiGet(`/api/sms/logs/${activeClientId}?limit=${limit}`);
+            const data = await apiPost('/api/proxy/sms/logs', {
+                accountSid: creds.accountSid,
+                authToken: creds.authToken,
+                phoneNumber: creds.phoneNumber,
+                limit,
+            });
 
             if (data.success) {
-                // Store all messages for detail view
                 lastLoadedMessages = [...data.outgoing, ...data.incoming];
 
-                // Render outgoing column
                 dom.outgoingLogs.querySelectorAll('.log-card').forEach(el => el.remove());
                 dom.emptyOutgoing.style.display = data.outgoing.length === 0 ? 'flex' : 'none';
                 dom.outgoingCount.textContent = data.outgoingCount;
+                data.outgoing.forEach(m => dom.outgoingLogs.appendChild(createLogCard(m, 'outgoing')));
 
-                data.outgoing.forEach(m => {
-                    dom.outgoingLogs.appendChild(createLogCard(m, 'outgoing'));
-                });
-
-                // Render incoming column
                 dom.incomingLogs.querySelectorAll('.log-card').forEach(el => el.remove());
                 dom.emptyIncomingLogs.style.display = data.incoming.length === 0 ? 'flex' : 'none';
                 dom.incomingLogCount.textContent = data.incomingCount;
-
-                data.incoming.forEach(m => {
-                    dom.incomingLogs.appendChild(createLogCard(m, 'incoming'));
-                });
+                data.incoming.forEach(m => dom.incomingLogs.appendChild(createLogCard(m, 'incoming')));
 
                 const total = data.outgoingCount + data.incomingCount;
                 showToast(`Loaded ${total} messages (${data.outgoingCount} out, ${data.incomingCount} in) for ${data.clientNumber}`, 'success');
@@ -588,7 +580,6 @@
         card.className = 'log-card';
         card.dataset.sid = m.sid;
 
-        // For outgoing: show "To" number. For incoming: show "From" number
         const displayPhone = type === 'outgoing' ? (m.to || '') : (m.from || '');
 
         card.innerHTML = `
@@ -663,11 +654,158 @@
         dom.msgModalOverlay.style.display = 'flex';
     }
 
+    // ===== Webhook Manager =====
+    async function loadWebhooks() {
+        if (!activeClientId) {
+            showToast('Select a client first', 'error');
+            return;
+        }
+
+        const creds = getActiveCreds();
+        if (!creds) { showToast('Client not found', 'error'); return; }
+
+        try {
+            dom.btnRefreshWebhooks.disabled = true;
+            dom.btnRefreshWebhooks.innerHTML = '<span class="spinner"></span> Loading...';
+
+            const data = await apiPost('/api/proxy/numbers', {
+                accountSid: creds.accountSid,
+                authToken: creds.authToken,
+            });
+
+            if (data.success) {
+                dom.webhooksList.querySelectorAll('.webhook-row').forEach(el => el.remove());
+                dom.emptyWebhooks.style.display = data.numbers.length === 0 ? 'flex' : 'none';
+                data.numbers.forEach(n => dom.webhooksList.appendChild(createWebhookRow(n, creds)));
+                if (data.numbers.length > 0) showToast(`Loaded ${data.numbers.length} number(s)`, 'success');
+            } else {
+                showToast(data.error || 'Failed to load numbers', 'error');
+            }
+        } catch (err) {
+            showToast('Error loading numbers: ' + err.message, 'error');
+        } finally {
+            dom.btnRefreshWebhooks.disabled = false;
+            dom.btnRefreshWebhooks.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"></polyline>
+          <polyline points="1 20 1 14 7 14"></polyline>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+        Refresh`;
+        }
+    }
+
+    function createWebhookRow(number, creds) {
+        const row = document.createElement('div');
+        row.className = 'webhook-row';
+        row.dataset.sid = number.sid;
+
+        row.innerHTML = `
+      <div class="webhook-row-header">
+        <div class="webhook-number-info">
+          <span class="webhook-number">${escapeHtml(number.phoneNumber)}</span>
+          ${number.friendlyName && number.friendlyName !== number.phoneNumber
+            ? `<span class="webhook-friendly">${escapeHtml(number.friendlyName)}</span>`
+            : ''}
+          <span class="webhook-sid mono">${escapeHtml(number.sid)}</span>
+        </div>
+        <button class="btn btn-secondary btn-sm btn-edit-webhook">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+          </svg>
+          Edit
+        </button>
+      </div>
+      <div class="webhook-urls">
+        <div class="webhook-url-row">
+          <span class="webhook-url-label">SMS</span>
+          <span class="webhook-url-value mono" id="sms-url-display-${escapeHtml(number.sid)}">${escapeHtml(number.smsUrl || '—')}</span>
+        </div>
+        <div class="webhook-url-row">
+          <span class="webhook-url-label">Voice</span>
+          <span class="webhook-url-value mono" id="voice-url-display-${escapeHtml(number.sid)}">${escapeHtml(number.voiceUrl || '—')}</span>
+        </div>
+      </div>
+      <div class="webhook-edit-form" id="webhook-edit-${escapeHtml(number.sid)}" style="display:none;">
+        <div class="form-group">
+          <label>SMS Webhook URL</label>
+          <input type="url" class="input webhook-sms-input" placeholder="https://yourapp.com/sms" value="${escapeHtml(number.smsUrl || '')}">
+        </div>
+        <div class="form-group">
+          <label>Voice Webhook URL</label>
+          <input type="url" class="input webhook-voice-input" placeholder="https://yourapp.com/voice" value="${escapeHtml(number.voiceUrl || '')}">
+        </div>
+        <div class="webhook-edit-actions">
+          <button class="btn btn-ghost btn-sm btn-cancel-webhook">Cancel</button>
+          <button class="btn btn-primary btn-sm btn-save-webhook">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+              <polyline points="17 21 17 13 7 13 7 21"></polyline>
+              <polyline points="7 3 7 8 15 8"></polyline>
+            </svg>
+            Save Webhooks
+          </button>
+        </div>
+      </div>
+    `;
+
+        const editForm = row.querySelector(`#webhook-edit-${number.sid}`);
+        const editBtn = row.querySelector('.btn-edit-webhook');
+        const cancelBtn = row.querySelector('.btn-cancel-webhook');
+        const saveBtn = row.querySelector('.btn-save-webhook');
+
+        editBtn.addEventListener('click', () => {
+            const open = editForm.style.display === 'none';
+            editForm.style.display = open ? 'block' : 'none';
+            editBtn.innerHTML = open
+                ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg> Close`
+                : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> Edit`;
+        });
+
+        cancelBtn.addEventListener('click', () => {
+            editForm.style.display = 'none';
+            editBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> Edit`;
+        });
+
+        saveBtn.addEventListener('click', async () => {
+            const smsUrl = row.querySelector('.webhook-sms-input').value.trim();
+            const voiceUrl = row.querySelector('.webhook-voice-input').value.trim();
+
+            try {
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = '<span class="spinner"></span> Saving...';
+
+                const data = await apiPut(`/api/proxy/numbers/${number.sid}/webhook`, {
+                    accountSid: creds.accountSid,
+                    authToken: creds.authToken,
+                    smsUrl,
+                    voiceUrl,
+                });
+
+                if (data.success) {
+                    document.getElementById(`sms-url-display-${number.sid}`).textContent = data.number.smsUrl || '—';
+                    document.getElementById(`voice-url-display-${number.sid}`).textContent = data.number.voiceUrl || '—';
+                    editForm.style.display = 'none';
+                    editBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> Edit`;
+                    showToast('Webhooks updated successfully', 'success');
+                } else {
+                    showToast(data.error || 'Failed to update webhooks', 'error');
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg> Save Webhooks`;
+            }
+        });
+
+        return row;
+    }
+
     // ===== Incoming Messages (SSE) =====
     function setupSSE() {
-        if (eventSource) {
-            eventSource.close();
-        }
+        if (eventSource) eventSource.close();
 
         eventSource = new EventSource('/api/sms/incoming/stream');
 
@@ -680,11 +818,9 @@
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === 'connected') return;
-
                 incomingMessages.unshift(data);
                 renderIncoming();
                 updateIncomingCount();
-
                 showToast(`New SMS from ${data.from}`, 'info');
             } catch (e) {
                 console.error('SSE parse error:', e);
@@ -699,7 +835,6 @@
 
     function renderIncoming() {
         dom.emptyIncoming.style.display = incomingMessages.length === 0 ? 'flex' : 'none';
-
         dom.incomingList.querySelectorAll('.incoming-msg-card').forEach(el => el.remove());
 
         incomingMessages.forEach(msg => {
@@ -739,17 +874,13 @@
         dom.tabBar.querySelectorAll('.tab').forEach(t => {
             t.classList.toggle('active', t.dataset.tab === tabName);
         });
-
         $$('.tab-panel').forEach(p => {
             p.classList.toggle('active', p.id === `panel-${tabName}`);
         });
 
-        // Auto-load logs when switching to logs tab
         if (tabName === 'logs' && activeClientId && lastLoadedMessages.length === 0) {
             loadLogs();
         }
-
-        // Auto-load webhooks when switching to webhooks tab
         if (tabName === 'webhooks' && activeClientId) {
             loadWebhooks();
         }
@@ -757,11 +888,9 @@
 
     // ===== Event Listeners =====
     function setupEventListeners() {
-        // Add client buttons
         dom.btnAddClient.addEventListener('click', openAddModal);
         dom.btnWelcomeAdd.addEventListener('click', openAddModal);
 
-        // Modal
         dom.btnModalClose.addEventListener('click', closeModal);
         dom.btnCancelModal.addEventListener('click', closeModal);
         dom.modalOverlay.addEventListener('click', (e) => {
@@ -771,35 +900,24 @@
         dom.btnVerifyCreds.addEventListener('click', verifyCreds);
         dom.btnFetchNumbers.addEventListener('click', fetchNumbers);
 
-        // Token toggle
         dom.btnToggleToken.addEventListener('click', () => {
             const isPassword = dom.clientToken.type === 'password';
             dom.clientToken.type = isPassword ? 'text' : 'password';
         });
 
-        // Tabs
         dom.tabBar.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', () => switchTab(tab.dataset.tab));
         });
 
-        // Send SMS
         dom.btnSendSms.addEventListener('click', sendSms);
         dom.smsBody.addEventListener('input', updateCharCount);
-
-        // Enter to send (Ctrl+Enter or Cmd+Enter)
         dom.smsBody.addEventListener('keydown', (e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                sendSms();
-            }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') sendSms();
         });
 
-        // Logs
         dom.btnRefreshLogs.addEventListener('click', loadLogs);
-
-        // Webhooks
         dom.btnRefreshWebhooks.addEventListener('click', loadWebhooks);
 
-        // Incoming
         dom.btnCopyWebhook.addEventListener('click', () => {
             const url = `${window.location.origin}/api/sms/webhook/incoming`;
             navigator.clipboard.writeText(url).then(() => {
@@ -821,7 +939,6 @@
             updateIncomingCount();
         });
 
-        // Message detail modal
         dom.btnMsgModalClose.addEventListener('click', () => {
             dom.msgModalOverlay.style.display = 'none';
         });
@@ -829,181 +946,12 @@
             if (e.target === dom.msgModalOverlay) dom.msgModalOverlay.style.display = 'none';
         });
 
-        // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 closeModal();
                 dom.msgModalOverlay.style.display = 'none';
             }
         });
-    }
-
-    // ===== Webhook Manager =====
-    async function loadWebhooks() {
-        if (!activeClientId) {
-            showToast('Select a client first', 'error');
-            return;
-        }
-
-        try {
-            dom.btnRefreshWebhooks.disabled = true;
-            dom.btnRefreshWebhooks.innerHTML = '<span class="spinner"></span> Loading...';
-
-            const data = await apiGet(`/api/clients/${activeClientId}/numbers`);
-
-            if (data.success) {
-                dom.webhooksList.querySelectorAll('.webhook-row').forEach(el => el.remove());
-                dom.emptyWebhooks.style.display = data.numbers.length === 0 ? 'flex' : 'none';
-
-                data.numbers.forEach(n => {
-                    dom.webhooksList.appendChild(createWebhookRow(n));
-                });
-
-                if (data.numbers.length > 0) {
-                    showToast(`Loaded ${data.numbers.length} number(s)`, 'success');
-                }
-            } else {
-                showToast(data.error || 'Failed to load numbers', 'error');
-            }
-        } catch (err) {
-            showToast('Error loading numbers: ' + err.message, 'error');
-        } finally {
-            dom.btnRefreshWebhooks.disabled = false;
-            dom.btnRefreshWebhooks.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-          stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="23 4 23 10 17 10"></polyline>
-          <polyline points="1 20 1 14 7 14"></polyline>
-          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-        </svg>
-        Refresh`;
-        }
-    }
-
-    function createWebhookRow(number) {
-        const row = document.createElement('div');
-        row.className = 'webhook-row';
-        row.dataset.sid = number.sid;
-
-        row.innerHTML = `
-      <div class="webhook-row-header">
-        <div class="webhook-number-info">
-          <span class="webhook-number">${escapeHtml(number.phoneNumber)}</span>
-          ${number.friendlyName && number.friendlyName !== number.phoneNumber
-            ? `<span class="webhook-friendly">${escapeHtml(number.friendlyName)}</span>`
-            : ''}
-          <span class="webhook-sid mono">${escapeHtml(number.sid)}</span>
-        </div>
-        <button class="btn btn-secondary btn-sm btn-edit-webhook" data-sid="${escapeHtml(number.sid)}">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-          </svg>
-          Edit
-        </button>
-      </div>
-      <div class="webhook-urls">
-        <div class="webhook-url-row">
-          <span class="webhook-url-label">SMS</span>
-          <span class="webhook-url-value mono" id="sms-url-display-${escapeHtml(number.sid)}">${escapeHtml(number.smsUrl || '—')}</span>
-        </div>
-        <div class="webhook-url-row">
-          <span class="webhook-url-label">Voice</span>
-          <span class="webhook-url-value mono" id="voice-url-display-${escapeHtml(number.sid)}">${escapeHtml(number.voiceUrl || '—')}</span>
-        </div>
-      </div>
-      <div class="webhook-edit-form" id="webhook-edit-${escapeHtml(number.sid)}" style="display:none;">
-        <div class="form-group">
-          <label>SMS Webhook URL</label>
-          <input type="url" class="input webhook-sms-input" placeholder="https://yourapp.com/sms" value="${escapeHtml(number.smsUrl || '')}">
-        </div>
-        <div class="form-group">
-          <label>Voice Webhook URL</label>
-          <input type="url" class="input webhook-voice-input" placeholder="https://yourapp.com/voice" value="${escapeHtml(number.voiceUrl || '')}">
-        </div>
-        <div class="webhook-edit-actions">
-          <button class="btn btn-ghost btn-sm btn-cancel-webhook">Cancel</button>
-          <button class="btn btn-primary btn-sm btn-save-webhook" data-sid="${escapeHtml(number.sid)}">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-              <polyline points="17 21 17 13 7 13 7 21"></polyline>
-              <polyline points="7 3 7 8 15 8"></polyline>
-            </svg>
-            Save Webhooks
-          </button>
-        </div>
-      </div>
-    `;
-
-        const editForm = row.querySelector(`#webhook-edit-${number.sid}`);
-        const editBtn = row.querySelector('.btn-edit-webhook');
-        const cancelBtn = row.querySelector('.btn-cancel-webhook');
-        const saveBtn = row.querySelector('.btn-save-webhook');
-
-        editBtn.addEventListener('click', () => {
-            editForm.style.display = editForm.style.display === 'none' ? 'block' : 'none';
-            editBtn.textContent = editForm.style.display === 'none' ? 'Edit' : 'Close';
-        });
-
-        cancelBtn.addEventListener('click', () => {
-            editForm.style.display = 'none';
-            editBtn.innerHTML = `
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-          </svg>
-          Edit`;
-        });
-
-        saveBtn.addEventListener('click', async () => {
-            const smsUrl = row.querySelector('.webhook-sms-input').value.trim();
-            const voiceUrl = row.querySelector('.webhook-voice-input').value.trim();
-            const sid = saveBtn.dataset.sid;
-
-            try {
-                saveBtn.disabled = true;
-                saveBtn.innerHTML = '<span class="spinner"></span> Saving...';
-
-                const data = await apiPut(`/api/clients/${activeClientId}/numbers/${sid}/webhook`, {
-                    smsUrl,
-                    voiceUrl
-                });
-
-                if (data.success) {
-                    // Update displayed values
-                    document.getElementById(`sms-url-display-${sid}`).textContent = data.number.smsUrl || '—';
-                    document.getElementById(`voice-url-display-${sid}`).textContent = data.number.voiceUrl || '—';
-                    editForm.style.display = 'none';
-                    editBtn.innerHTML = `
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round" stroke-linejoin="round">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-              </svg>
-              Edit`;
-                    showToast('Webhooks updated successfully', 'success');
-                } else {
-                    showToast(data.error || 'Failed to update webhooks', 'error');
-                }
-            } catch (err) {
-                showToast('Error: ' + err.message, 'error');
-            } finally {
-                saveBtn.disabled = false;
-                saveBtn.innerHTML = `
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-              <polyline points="17 21 17 13 7 13 7 21"></polyline>
-              <polyline points="7 3 7 8 15 8"></polyline>
-            </svg>
-            Save Webhooks`;
-            }
-        });
-
-        return row;
     }
 
     // ===== Utilities =====
@@ -1028,18 +976,14 @@
         const d = new Date(dateStr);
         const now = new Date();
         const isToday = d.toDateString() === now.toDateString();
-
-        if (isToday) {
-            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
+        if (isToday) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
             d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
     function formatDateFull(dateStr) {
         if (!dateStr) return '—';
-        const d = new Date(dateStr);
-        return d.toLocaleString();
+        return new Date(dateStr).toLocaleString();
     }
 
     function showToast(message, type = 'info') {
@@ -1047,7 +991,6 @@
         toast.className = `toast ${type}`;
         toast.textContent = message;
         dom.toastContainer.appendChild(toast);
-
         setTimeout(() => {
             toast.style.animation = 'toast-out 0.3s ease forwards';
             setTimeout(() => toast.remove(), 300);
