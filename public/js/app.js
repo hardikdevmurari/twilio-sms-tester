@@ -720,21 +720,35 @@
       <div class="webhook-urls">
         <div class="webhook-url-row">
           <span class="webhook-url-label">SMS</span>
+          <span class="webhook-method-badge" id="sms-method-display-${escapeHtml(number.sid)}">${escapeHtml(number.smsMethod || 'POST')}</span>
           <span class="webhook-url-value mono" id="sms-url-display-${escapeHtml(number.sid)}">${escapeHtml(number.smsUrl || '—')}</span>
         </div>
         <div class="webhook-url-row">
           <span class="webhook-url-label">Voice</span>
+          <span class="webhook-method-badge" id="voice-method-display-${escapeHtml(number.sid)}">${escapeHtml(number.voiceMethod || 'POST')}</span>
           <span class="webhook-url-value mono" id="voice-url-display-${escapeHtml(number.sid)}">${escapeHtml(number.voiceUrl || '—')}</span>
         </div>
       </div>
       <div class="webhook-edit-form" id="webhook-edit-${escapeHtml(number.sid)}" style="display:none;">
         <div class="form-group">
-          <label>SMS Webhook URL</label>
-          <input type="url" class="input webhook-sms-input" placeholder="https://yourapp.com/sms" value="${escapeHtml(number.smsUrl || '')}">
+          <label>SMS Webhook</label>
+          <div class="webhook-input-row">
+            <select class="input webhook-sms-method select-input webhook-method-select">
+              <option value="POST" ${(number.smsMethod || 'POST') === 'POST' ? 'selected' : ''}>POST</option>
+              <option value="GET" ${number.smsMethod === 'GET' ? 'selected' : ''}>GET</option>
+            </select>
+            <input type="url" class="input webhook-sms-input" placeholder="https://yourapp.com/sms" value="${escapeHtml(number.smsUrl || '')}">
+          </div>
         </div>
         <div class="form-group">
-          <label>Voice Webhook URL</label>
-          <input type="url" class="input webhook-voice-input" placeholder="https://yourapp.com/voice" value="${escapeHtml(number.voiceUrl || '')}">
+          <label>Voice Webhook</label>
+          <div class="webhook-input-row">
+            <select class="input webhook-voice-method select-input webhook-method-select">
+              <option value="POST" ${(number.voiceMethod || 'POST') === 'POST' ? 'selected' : ''}>POST</option>
+              <option value="GET" ${number.voiceMethod === 'GET' ? 'selected' : ''}>GET</option>
+            </select>
+            <input type="url" class="input webhook-voice-input" placeholder="https://yourapp.com/voice" value="${escapeHtml(number.voiceUrl || '')}">
+          </div>
         </div>
         <div class="webhook-edit-actions">
           <button class="btn btn-ghost btn-sm btn-cancel-webhook">Cancel</button>
@@ -771,6 +785,8 @@
         saveBtn.addEventListener('click', async () => {
             const smsUrl = row.querySelector('.webhook-sms-input').value.trim();
             const voiceUrl = row.querySelector('.webhook-voice-input').value.trim();
+            const smsMethod = row.querySelector('.webhook-sms-method').value;
+            const voiceMethod = row.querySelector('.webhook-voice-method').value;
 
             try {
                 saveBtn.disabled = true;
@@ -781,11 +797,15 @@
                     authToken: creds.authToken,
                     smsUrl,
                     voiceUrl,
+                    smsMethod,
+                    voiceMethod,
                 });
 
                 if (data.success) {
                     document.getElementById(`sms-url-display-${number.sid}`).textContent = data.number.smsUrl || '—';
                     document.getElementById(`voice-url-display-${number.sid}`).textContent = data.number.voiceUrl || '—';
+                    document.getElementById(`sms-method-display-${number.sid}`).textContent = data.number.smsMethod || 'POST';
+                    document.getElementById(`voice-method-display-${number.sid}`).textContent = data.number.voiceMethod || 'POST';
                     editForm.style.display = 'none';
                     editBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> Edit`;
                     showToast('Webhooks updated successfully', 'success');

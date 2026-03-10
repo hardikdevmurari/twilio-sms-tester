@@ -1,93 +1,81 @@
-# Twilio SMS Tester ⚡
+# Twilio SMS Tester
 
-A standalone developer tool for testing Twilio SMS across multiple client accounts — no more juggling the Twilio dashboard.
+A developer tool for testing and managing Twilio SMS across multiple client accounts — without touching the Twilio dashboard.
 
-![Twilio SMS Tester Screenshot](./docs/screenshot.png)
+**Live:** [https://twilio-sms-tester.onrender.com](https://twilio-sms-tester.onrender.com)
+
+---
 
 ## Why?
 
 When building SMS features for clients, testing is painful:
-- 🔁 Switching between Twilio accounts to check logs
-- 📋 Using the "Try SMS" dashboard page to send test messages
-- 🔍 Digging through the console to find specific messages
+- Switching between Twilio accounts to check logs
+- Using the "Try SMS" dashboard page to send test messages
+- Digging through the console to find specific messages
+- Going back to configure webhooks every time
 
-**This tool puts everything in one place.** Add your clients' Twilio credentials, send messages, view logs, and monitor incoming SMS — all in a single app.
+**This tool puts everything in one place.**
 
 ## Features
 
 | Feature | Description |
 |---|---|
-| 🏢 **Multi-Client** | Store multiple Twilio accounts. Switch between them in one click |
-| 📤 **Send SMS** | Compose and send test messages to any number |
-| 📋 **Message Logs** | View sent/received messages pulled from Twilio API |
-| 📥 **Incoming SMS** | Real-time incoming message feed via webhook + SSE |
-| 🔒 **Encrypted Storage** | Auth tokens encrypted (AES-256-CBC) in local JSON |
-| 🔎 **Message Details** | Click any message to see full details (SID, price, errors) |
-| 📱 **Number Scoped** | Logs and messages are scoped to the client's specific Twilio number |
+| **Multi-Client** | Add multiple Twilio accounts, switch between them in one click |
+| **Send SMS** | Compose and send messages from your Twilio number |
+| **Message Logs** | Split-view outgoing/incoming history with full message details |
+| **Webhook Manager** | View and update SMS & Voice webhook URLs per phone number |
+| **Incoming SMS** | Real-time incoming feed via webhook + SSE |
+| **No server storage** | Credentials stay in your browser's localStorage only |
 
-## Quick Start
+## Run locally
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) v16 or higher
-- A [Twilio](https://www.twilio.com/) account (free trial works)
-
-### Setup
+- [Node.js](https://nodejs.org/) v16+
+- A [Twilio](https://www.twilio.com/) account
 
 ```bash
-# Clone the repo
 git clone https://github.com/hardikdevmurari/twilio-sms-tester.git
 cd twilio-sms-tester
-
-# Install dependencies
 npm install
-
-# Set up environment
-cp .env.example .env
-# Edit .env and set your own ENCRYPTION_KEY (any 32-char string)
-
-# Start the app
-npm run dev
+npm start
+# → http://localhost:3456
 ```
 
-Open [http://localhost:3456](http://localhost:3456) in your browser.
-
-### First Steps
-
-1. Click **+** to add a client
-2. Enter their **Account SID**, **Auth Token**, and **Twilio Phone Number** (find these in the [Twilio Console](https://console.twilio.com/))
-3. Click **Save** — you're ready to test!
+No `.env` required. Optionally set `PORT` to change the port.
 
 ## Usage
 
+### Add a client
+Click **+** → enter Account SID, Auth Token, and phone number → **Save**.
+Credentials are stored only in your browser's `localStorage` — nothing is saved on the server.
+
 ### Send SMS
-Select a client → **Send SMS** tab → enter the destination number and message → **Send**.
+Select a client → **Send SMS** tab → enter destination number and message → **Send**.
 
-### View Logs
-Select a client → **Message Logs** tab → click **Refresh** to pull logs from Twilio. Click any row for full details.
+### Message Logs
+Select a client → **Message Logs** tab → click **Refresh** to pull from Twilio API.
+Click any row for full details (SID, price, direction, error codes).
 
-### Incoming Messages
-For real-time incoming SMS, you need to expose your local server with a tunnel:
+### Webhook Manager
+Select a client → **Webhooks** tab → see all phone numbers with their current SMS and Voice webhook URLs → click **Edit** to update.
 
+### Incoming SMS (real-time)
+The app listens for incoming messages via Twilio webhook + SSE.
+
+Set your Twilio number's SMS webhook to:
+```
+https://twilio-sms-tester.onrender.com/api/sms/webhook/incoming
+```
+
+Or if running locally, expose your port with [ngrok](https://ngrok.com):
 ```bash
-# Using ngrok (recommended)
 ngrok http 3456
-
-# Copy the HTTPS URL, then in the app:
-# Go to "Incoming" tab → Click "Copy Webhook URL"
+# then set: https://<your-id>.ngrok.io/api/sms/webhook/incoming
 ```
 
-Set the webhook URL in your [Twilio Console](https://console.twilio.com/) → Phone Numbers → Your Number → Messaging → "A message comes in" → Paste the URL:
+## How it works
 
-```
-https://your-ngrok-id.ngrok.io/api/sms/webhook/incoming
-```
-
-## Configuration
-
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `3456` | Server port |
-| `ENCRYPTION_KEY` | — | 32-char key for encrypting auth tokens |
+The server is a **stateless Twilio proxy** — credentials are passed with each request and used to call the Twilio API, but never stored on the server. All client data lives in your browser's `localStorage`.
 
 ## Project Structure
 
@@ -95,66 +83,40 @@ https://your-ngrok-id.ngrok.io/api/sms/webhook/incoming
 twilio-sms-tester/
 ├── server.js              # Express server
 ├── routes/
-│   ├── clients.js         # Client CRUD API
-│   └── sms.js             # SMS send, logs, webhook, SSE
-├── utils/
-│   └── storage.js         # Encrypted JSON storage
+│   ├── proxy.js           # Stateless Twilio proxy (send, logs, numbers, webhooks)
+│   └── sms.js             # Incoming webhook receiver + SSE stream
 ├── public/
 │   ├── index.html         # Single-page app
 │   ├── css/style.css      # Dark theme UI
-│   └── js/app.js          # Frontend logic
-├── data/                  # Auto-created, gitignored
-│   └── clients.json       # Encrypted client data
-├── .env.example           # Environment template
+│   └── js/app.js          # Frontend logic (localStorage client storage)
 └── package.json
 ```
 
-## API Reference
+## API
 
-### Clients
+### Proxy (stateless — credentials in request body)
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/clients` | List all clients (tokens masked) |
-| `POST` | `/api/clients` | Add a new client |
-| `PUT` | `/api/clients/:id` | Update a client |
-| `DELETE` | `/api/clients/:id` | Delete a client |
-| `POST` | `/api/clients/:id/verify` | Verify Twilio credentials |
+| `POST` | `/api/proxy/verify` | Verify Twilio credentials |
+| `POST` | `/api/proxy/numbers` | List phone numbers with webhook URLs |
+| `PUT` | `/api/proxy/numbers/:sid/webhook` | Update SMS/Voice webhooks |
+| `POST` | `/api/proxy/sms/send` | Send an SMS |
+| `POST` | `/api/proxy/sms/logs` | Fetch message logs |
 
-### SMS
+### Incoming SMS
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/sms/send` | Send an SMS |
-| `GET` | `/api/sms/logs/:clientId` | Fetch message logs |
-| `GET` | `/api/sms/message/:clientId/:sid` | Get message details |
 | `POST` | `/api/sms/webhook/incoming` | Twilio webhook for incoming SMS |
-| `GET` | `/api/sms/incoming/stream` | SSE stream for real-time incoming |
-| `GET` | `/api/sms/incoming` | Get stored incoming messages |
-
-## Security
-
-- Auth tokens are **encrypted at rest** using AES-256-CBC before being saved to disk
-- Tokens are **masked in API responses** (only last 4 characters shown)
-- The `.env` file and `data/` directory are gitignored
-- No data is sent to any third-party service — everything stays local
-
-> ⚠️ **Important:** This tool stores Twilio credentials locally. Do not deploy it on a shared or public server without adding proper authentication.
+| `GET` | `/api/sms/incoming/stream` | SSE stream for real-time messages |
 
 ## Tech Stack
 
 - **Backend:** Node.js, Express
-- **Frontend:** Vanilla HTML, CSS, JavaScript
-- **Storage:** Encrypted local JSON files
+- **Frontend:** Vanilla HTML/CSS/JS (SPA)
 - **Real-time:** Server-Sent Events (SSE)
-- **Twilio SDK:** Official [twilio-node](https://github.com/twilio/twilio-node)
-
-## Contributing
-
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+- **Twilio SDK:** [twilio-node](https://github.com/twilio/twilio-node) v5
+- **Hosting:** Render
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
-
----
-
-**Built with ❤️ for developers who are tired of the Twilio dashboard.**
+MIT

@@ -1412,6 +1412,31 @@ body {
   margin-top: 12px;
 }
 
+.webhook-method-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  background: var(--accent-subtle);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.webhook-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.webhook-method-select {
+  width: 80px;
+  flex-shrink: 0;
+  padding: 0 8px;
+  height: 38px;
+}
+
 .btn-sm {
   padding: 6px 12px;
   font-size: 0.8rem;
